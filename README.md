@@ -5,9 +5,10 @@ Télécharge **la vidéo (MP4)** et **le transcript (VTT / SRT / texte)** des en
 même quand le bouton « Télécharger » est désactivé.
 
 L'extension capte automatiquement, pendant la lecture, le manifeste vidéo et le jeton d'accès de
-**votre** session, récupère les segments, les **déchiffre (AES-128) via WebCrypto**, puis
-**remuxe la vidéo + l'audio en MP4 en pur JavaScript** — le tout **en local, dans votre navigateur**.
-Aucun serveur tiers, aucune dépendance externe, aucune étape de build.
+**votre** session, sélectionne **la meilleure qualité disponible**, récupère les segments **en
+parallèle**, les **déchiffre (AES-128) via WebCrypto**, puis **remuxe la vidéo + l'audio en MP4 en
+pur JavaScript** — le tout **en local, dans votre navigateur**. Aucun serveur tiers, aucune
+dépendance externe, aucune étape de build.
 
 > ⚠️ **Usage responsable.** N'utilisez cet outil que sur des contenus que vous avez le droit de
 > visionner, et **respectez la politique de votre organisation**. L'outil ne contourne aucune
@@ -34,9 +35,8 @@ Aucun téléchargement de dépendance : l'extension est autonome.
 2. Cliquez sur l'**icône de l'extension** : un **panneau** s'ouvre **en surimpression sur la page**
    (pas de nouvel onglet). Un badge vert **●** sur l'icône indique qu'une vidéo est détectée.
 3. Dans le panneau :
-   - **⬇︎ Télécharger la vidéo (MP4)** → récupère, déchiffre, remuxe, enregistre le `.mp4`
-     (et le transcript en `.vtt` s'il existe).
-   - **Transcript : VTT / SRT / Texte** → export au format choisi.
+   - **⬇︎ Télécharger la vidéo (MP4)** → récupère, déchiffre, remuxe et enregistre le `.mp4`.
+   - **Transcript : VTT / SRT / Texte** → export **séparé**, au format choisi (bouton dédié).
 4. La progression s'affiche dans le panneau ; à la fin, la fenêtre d'enregistrement apparaît.
 
 Le nom de fichier est pré-rempli d'après le titre de la page (modifiable). Fermez le panneau avec
@@ -66,11 +66,11 @@ que le jeton de la session en cours. Rien n'est partagé entre utilisateurs.
 
 | Étape | Détail |
 |-------|--------|
-| **Capture** | `background.js` observe les requêtes `…/videomanifest…` et lit l'en-tête `X-SPOPacToken` + l'URL du transcript. |
+| **Capture** | `background.js` observe les requêtes `…/videomanifest…` (sur `*.svc.ms` et `*.sharepoint.com`), lit l'en-tête `X-SPOPacToken` + l'URL du transcript, et rafraîchit le jeton à la volée (il expire vite). |
 | **UI** | `content.js` injecte le panneau (`panel.html`) en overlay dans la page ; il tourne dans le contexte de l'extension (accès aux API, permissions d'hôte). |
-| **Manifeste** | Demandé en **HLS** (`format=hls`) : pistes vidéo + audio séparées, clé AES-128 + IV. |
-| **Déchiffrement** | Chaque segment est déchiffré en **AES-128-CBC** via `crypto.subtle` (WebCrypto). |
-| **Remux** | `mux.js` fusionne les deux `moov` (pistes déjà distinctes : vidéo=1, audio=2) et entrelace les fragments → MP4 unique. **~15 ms**, sans ré-encodage (qualité d'origine). |
+| **Manifeste** | Demandé en **HLS** (`format=hls`) : pistes vidéo + audio séparées, clé AES-128 + IV. La variante de **plus haute qualité** (`BANDWIDTH` max) est retenue automatiquement. |
+| **Déchiffrement** | Les segments sont récupérés **en parallèle** (12 à la fois) et déchiffrés en **AES-128-CBC** via `crypto.subtle` (WebCrypto). |
+| **Remux** | `mux.js` fusionne les deux `moov` (pistes déjà distinctes : vidéo=1, audio=2) et entrelace les fragments → MP4 unique. **~15 ms**, sans ré-encodage (qualité d'origine). Si l'audio est déjà inclus dans la piste vidéo, l'étape est ignorée. |
 | **Transcript** | JSON Stream chiffré avec la **même clé** → déchiffré puis converti en VTT/SRT/TXT. |
 
 ---
