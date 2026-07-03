@@ -1,0 +1,19 @@
+#spsd-overlay {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  width: 360px;
+  height: 560px;
+  max-height: calc(100vh - 32px);
+  z-index: 2147483647;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .35);
+  background: #1e1e1e;
+}
+#spsd-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}

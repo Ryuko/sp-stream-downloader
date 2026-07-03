@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <title>SharePoint Stream Downloader</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { font: 13px/1.45 -apple-system, system-ui, sans-serif; margin: 0; padding: 14px;
+      color: #eee; background: #1e1e1e; height: 100vh; display: flex; flex-direction: column; }
+    header { display: flex; align-items: center; justify-content: space-between; }
+    h1 { font-size: 14px; margin: 0; }
+    #close { background: transparent; border: 0; color: #999; font-size: 20px; cursor: pointer; line-height: 1; }
+    .sub { color: #888; font-size: 11px; margin: 2px 0 12px; }
+    .status { padding: 8px 10px; border-radius: 8px; margin-bottom: 12px; font-size: 12px; }
+    .ok { background: rgba(34,197,94,.16); }
+    .wait { background: rgba(234,179,8,.16); }
+    .err { background: rgba(239,68,68,.16); color: #fca5a5; }
+    label { display: block; font-size: 11px; color: #888; margin: 10px 0 4px; }
+    input[type=text] { width: 100%; padding: 6px 8px; border-radius: 6px;
+      border: 1px solid rgba(255,255,255,.15); background: #111; color: inherit; font: inherit; }
+    button.act { width: 100%; padding: 9px 10px; border: 0; border-radius: 8px; cursor: pointer;
+      font: inherit; font-weight: 600; margin-top: 10px; }
+    .primary { background: #2563eb; color: #fff; }
+    .seg { display: flex; gap: 6px; margin-top: 6px; }
+    .seg button { flex: 1; padding: 7px 4px; border: 0; border-radius: 8px; cursor: pointer;
+      background: rgba(255,255,255,.1); color: inherit; font: inherit; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    #bar { height: 8px; background: rgba(255,255,255,.12); border-radius: 5px; overflow: hidden; margin: 14px 0 4px; }
+    #fill { height: 100%; width: 0; background: #2563eb; transition: width .2s; }
+    #pct { font-size: 11px; color: #888; font-variant-numeric: tabular-nums; }
+    #log { margin-top: 10px; font: 11px/1.5 ui-monospace, monospace; white-space: pre-wrap;
+      color: #bbb; background: #141414; border-radius: 8px; padding: 8px; flex: 1; overflow: auto; }
+    .done { color: #4ade80; font-weight: 600; }
+    .foot { margin-top: 8px; font-size: 10px; color: #777; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Stream Downloader</h1>
+    <button id="close" title="Fermer">×</button>
+  </header>
+  <div class="sub">Vidéo &amp; transcript des enregistrements que vous pouvez lire.</div>
+
+  <div id="status" class="status wait">Recherche d'une vidéo… lancez la lecture.</div>
+
+  <div id="controls" hidden>
+    <label for="fname">Nom du fichier</label>
+    <input id="fname" type="text" />
+    <button id="dlVideo" class="act primary">⬇︎ Télécharger la vidéo (MP4)</button>
+    <div id="trBlock" hidden>
+      <label>Transcript</label>
+      <div class="seg">
+        <button data-fmt="vtt">VTT</button>
+        <button data-fmt="srt">SRT</button>
+        <button data-fmt="txt">Texte</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="progress" hidden>
+    <div id="bar"><div id="fill"></div></div>
+    <div id="pct">0 %</div>
+  </div>
+
+  <div id="log" hidden></div>
+  <div class="foot">Réservé aux contenus autorisés. Respectez la politique de votre organisation.</div>
+
+  <script src="mux.js"></script>
+  <script src="panel.js"></script>
+</body>
+</html>
