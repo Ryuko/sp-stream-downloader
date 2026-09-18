@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SharePoint Stream Downloader",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Télécharge la vidéo (MP4) et le transcript (VTT/SRT/TXT) des enregistrements SharePoint / Teams Stream que vous êtes autorisé à visionner. Déchiffrement + remux 100% dans le navigateur, sans ffmpeg.",
   "permissions": ["webRequest", "downloads", "storage", "tabs", "scripting"],
   "host_permissions": [
