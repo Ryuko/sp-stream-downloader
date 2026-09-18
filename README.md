@@ -4,11 +4,12 @@ Télécharge **la vidéo (MP4)** et **le transcript (VTT / SRT / texte)** des en
 **SharePoint / Teams Stream** que vous êtes autorisé à **visionner**, directement depuis la page —
 même quand le bouton « Télécharger » est désactivé.
 
-L'extension capte automatiquement, pendant la lecture, le manifeste vidéo et le jeton d'accès de
-**votre** session, sélectionne **la meilleure qualité disponible**, récupère les segments **en
-parallèle**, les **déchiffre (AES-128) via WebCrypto**, puis **remuxe la vidéo + l'audio en MP4 en
-pur JavaScript** — le tout **en local, dans votre navigateur**. Aucun serveur tiers, aucune
-dépendance externe, aucune étape de build.
+L'extension reconstruit l'URL du manifeste vidéo à partir des métadonnées de la page
+(`g_fileInfo`) et de ce qu'elle observe pendant la lecture (jeton, requêtes du lecteur), sélectionne
+**la meilleure qualité disponible**, récupère les segments **en parallèle**, les **déchiffre
+(AES-128) via WebCrypto**, puis **remuxe la vidéo + l'audio en MP4 en pur JavaScript** — le tout
+**en local, dans votre navigateur**. Aucun serveur tiers, aucune dépendance externe, aucune étape
+de build.
 
 > ⚠️ **Usage responsable.** N'utilisez cet outil que sur des contenus que vous avez le droit de
 > visionner, et **respectez la politique de votre organisation**. L'outil ne contourne aucune
@@ -30,8 +31,9 @@ Aucun téléchargement de dépendance : l'extension est autonome.
 
 ## Utilisation
 
-1. Ouvrez l'enregistrement dans SharePoint / Teams Stream et **lancez la lecture** (quelques
-   secondes suffisent — c'est ce qui déclenche la capture du manifeste + du jeton).
+1. Ouvrez l'enregistrement dans SharePoint / Teams Stream. La vidéo est détectée dès le
+   chargement de la page ; **lancer la lecture quelques secondes** reste conseillé (cela capture
+   un jeton frais, nécessaire sur certains tenants).
 2. Cliquez sur l'**icône de l'extension** : un **panneau** s'ouvre **en surimpression sur la page**
    (pas de nouvel onglet). Un badge vert **●** sur l'icône indique qu'une vidéo est détectée.
 3. Dans le panneau :
@@ -66,9 +68,9 @@ que le jeton de la session en cours. Rien n'est partagé entre utilisateurs.
 
 | Étape | Détail |
 |-------|--------|
-| **Capture** | `background.js` observe les requêtes `…/videomanifest…` (sur `*.svc.ms` et `*.sharepoint.com`), lit l'en-tête `X-SPOPacToken` + l'URL du transcript, et rafraîchit le jeton à la volée (il expire vite). |
+| **Détection** | `background.js` lit `g_fileInfo` dans la page (via `chrome.scripting`, monde MAIN) : `.transformUrl` + `.ctag` permettent de reconstruire l'URL `…/videomanifest?…&action=Access&part=index` (même méthode que yt-dlp). Il observe aussi les requêtes `…/videomanifest…` et `…/oneDrive.transcode…` du lecteur, l'en-tête `X-SPOPacToken` (rafraîchi à la volée) et l'URL du transcript. |
 | **UI** | `content.js` injecte le panneau (`panel.html`) en overlay dans la page ; il tourne dans le contexte de l'extension (accès aux API, permissions d'hôte). |
-| **Manifeste** | Demandé en **HLS** (`format=hls`) : pistes vidéo + audio séparées, clé AES-128 + IV. La variante de **plus haute qualité** (`BANDWIDTH` max) est retenue automatiquement. |
+| **Manifeste** | `manifest.js` construit les URLs candidates (requête capturée, `g_fileInfo`, segment `oneDrive.transcode`) et les essaie dans l'ordre, en **HLS** (`format=hls`) puis en **DASH** (`format=dash`, MPD avec `SegmentTemplate`/`SegmentTimeline` et chiffrement DASH-SEA AES-128-CBC). La variante de **plus haute qualité** est retenue automatiquement ; chaque tentative est tracée dans le journal du panneau. |
 | **Déchiffrement** | Les segments sont récupérés **en parallèle** (12 à la fois) et déchiffrés en **AES-128-CBC** via `crypto.subtle` (WebCrypto). |
 | **Remux** | `mux.js` fusionne les deux `moov` (pistes déjà distinctes : vidéo=1, audio=2) et entrelace les fragments → MP4 unique. **~15 ms**, sans ré-encodage (qualité d'origine). Si l'audio est déjà inclus dans la piste vidéo, l'étape est ignorée. |
 | **Transcript** | JSON Stream chiffré avec la **même clé** → déchiffré puis converti en VTT/SRT/TXT. |
@@ -77,9 +79,16 @@ que le jeton de la session en cours. Rien n'est partagé entre utilisateurs.
 
 ## Limites & dépannage
 
-- **« Aucune vidéo détectée »** → lancez d'abord la **lecture**, puis (re)cliquez l'icône. Si la page
-  était déjà ouverte avant d'installer l'extension, **rechargez-la** (Cmd/Ctrl+R).
-- **Erreur `HTTP 401/403`** → le jeton d'accès expire vite. Relancez la lecture puis réessayez.
+- **« Recherche d'une vidéo… »** qui ne se termine pas → rechargez la page (Cmd/Ctrl+R), lancez la
+  **lecture**, puis rouvrez le panneau. Si la page était déjà ouverte avant d'installer ou de
+  recharger l'extension, le rechargement est indispensable.
+- **Erreur `HTTP 401/403`** ou **« jeton non capturé »** → lancez la lecture quelques secondes
+  (le lecteur envoie alors un `X-SPOPacToken` frais), puis réessayez.
+- **« Aucun manifeste exploitable »** → le journal du panneau liste chaque URL essayée et la
+  réponse obtenue : c'est l'information à transmettre pour diagnostic.
+- **Septembre 2026** : le lecteur Microsoft n'appelle plus `videomanifest` (il télécharge ses
+  segments via `oneDrive.transcode`), ce qui a rendu muette la capture passive des versions ≤ 1.1.
+  La 1.2 reconstruit l'URL du manifeste depuis la page, sans dépendre de la lecture.
 - **Diagnostic** : sur `chrome://extensions`, cliquez « service worker » sous l'extension pour voir
   les logs `[SPSD]` (capture du manifeste/jeton). Le panneau affiche aussi un journal détaillé.
 - **Contenu protégé par un vrai DRM (Widevine/PlayReady)** → non pris en charge (rare en interne).
@@ -94,5 +103,13 @@ sp-stream-downloader/
 ├─ background.js    # capture manifeste + jeton + transcript ; ouvre le panneau
 ├─ content.js/css   # injecte le panneau overlay dans la page SharePoint
 ├─ panel.html/js    # UI + pipeline : fetch, déchiffrement, remux, téléchargement
-└─ mux.js           # remuxeur fragmented-MP4 en pur JS (vidéo + audio → MP4)
+├─ manifest.js      # URLs candidates + parseurs HLS / DASH (pur JS, testable sous Node)
+├─ mux.js           # remuxeur fragmented-MP4 en pur JS (vidéo + audio → MP4)
+└─ test/            # tests unitaires (node:test)
+```
+
+## Tests
+
+```bash
+node --test test/manifest.test.js
 ```
