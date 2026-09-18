@@ -3,7 +3,7 @@
 const $ = (id) => document.getElementById(id);
 const tabId = parseInt((location.hash.match(/tab=(\d+)/) || [])[1], 10);
 
-let JOB = null; // { token } filled from capture
+let JOB = null; // { cap } — everything background.js captured for this tab
 
 function showLog() { $("log").hidden = false; }
 function log(msg, cls) {
@@ -31,76 +31,26 @@ function sanitize(n) {
   s = s.replace(/(\.(mp4|m4a|mov|vtt|srt|txt))+$/i, "").trim();
   return s.slice(0, 120) || "video";
 }
+// Host + path + the few query params that matter, never credentials.
+function short(url) {
+  const m = String(url).match(/[?&](part|format|track)=[^&]*/g) || [];
+  return String(url).split("?")[0].replace(/^https:\/\//, "") + "?" + m.map((x) => x.slice(1)).join("&");
+}
 
 $("close").addEventListener("click", () => parent.postMessage("spsd-close", "*"));
 
 // ---------- HTTP (authenticated in-session) ----------
-function hdr() { return { "X-SPOPacToken": JOB.token }; }
+// Session cookies always go along. The X-SPOPacToken header is added only when
+// one was captured: the *.svc.ms CDN requires it, the tenant's *.sharepoint.com
+// hosts accept the cookies alone.
+function hdr() { return JOB && JOB.cap.token ? { "X-SPOPacToken": JOB.cap.token } : {}; }
 async function fx(url, kind) {
   const r = await fetch(url, { headers: hdr(), credentials: "include", cache: "no-store" });
-  if (!r.ok) throw new Error(`HTTP ${r.status} — ${url.slice(0, 80)}…`);
+  if (!r.ok) {
+    const ec = r.headers.get("x-errorcode") || r.headers.get("x-ms-error-code") || "";
+    throw new Error(`HTTP ${r.status}${ec ? " (" + ec + ")" : ""} — ${short(url)}`);
+  }
   return kind === "buf" ? new Uint8Array(await r.arrayBuffer()) : r.text();
-}
-
-// ---------- HLS helpers ----------
-const attr = (line, name) => { const m = line.match(new RegExp(name + '="([^"]*)"')); return m ? m[1] : null; };
-function forceHls(u) {
-  if (/[?&]format=dash/i.test(u)) return u.replace(/([?&]format=)dash/i, "$1hls");
-  if (/[?&]format=hls/i.test(u)) return u;
-  return u + (u.includes("?") ? "&" : "?") + "format=hls";
-}
-function parseIV(line) {
-  const m = line.match(/IV=0x([0-9A-Fa-f]+)/);
-  const hex = (m ? m[1] : "").padStart(32, "0").slice(-32);
-  const iv = new Uint8Array(16);
-  for (let i = 0; i < 16; i++) iv[i] = parseInt(hex.substr(i * 2, 2), 16);
-  return iv;
-}
-function defineResolver(lines, seed) {
-  const D = Object.assign({}, seed);
-  for (const l of lines) {
-    const m = l.match(/#EXT-X-DEFINE:NAME="([^"]+)",\s*VALUE="(.*)"$/);
-    if (m) D[m[1]] = m[2];
-  }
-  return (u) => { for (const k in D) u = u.split("{$" + k + "}").join(D[k]); return u; };
-}
-function parseMaster(text) {
-  const lines = text.split(/\r?\n/);
-  let vpk = null; const audio = {};
-  for (const l of lines) {
-    if (l.startsWith("#EXT-X-DEFINE") && /NAME="commonVpkUrlVariable"/.test(l)) vpk = attr(l, "VALUE");
-    if (l.startsWith("#EXT-X-MEDIA") && /TYPE=AUDIO/.test(l)) { const g = attr(l, "GROUP-ID"); if (g && !audio[g]) audio[g] = attr(l, "URI"); }
-  }
-  let best = null;
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].startsWith("#EXT-X-STREAM-INF")) {
-      const bw = parseInt((lines[i].match(/BANDWIDTH=(\d+)/) || [])[1] || "0", 10);
-      const ag = attr(lines[i], "AUDIO");
-      let j = i + 1; while (j < lines.length && (lines[j].startsWith("#") || !lines[j].trim())) j++;
-      const uri = lines[j] ? lines[j].trim() : null;
-      if (uri && (!best || bw > best.bw)) best = { bw, uri, ag };
-    }
-  }
-  if (!best) throw new Error("Aucun flux vidéo dans le manifeste HLS.");
-  return { vpk, videoUrl: best.uri, audioUrl: best.ag ? audio[best.ag] : null };
-}
-function parseMedia(text, vpk) {
-  const lines = text.split(/\r?\n/);
-  const sub = defineResolver(lines, { commonVpkUrlVariable: vpk });
-  let init = null, curKey = null, firstKey = null; const segments = [];
-  for (let i = 0; i < lines.length; i++) {
-    const l = lines[i];
-    if (l.startsWith("#EXT-X-MAP")) init = sub(attr(l, "URI"));
-    else if (l.startsWith("#EXT-X-KEY")) {
-      if (/METHOD=NONE/i.test(l)) curKey = null;
-      else { curKey = { uri: sub(attr(l, "URI")), iv: parseIV(l) }; if (!firstKey) firstKey = curKey; }
-    } else if (l.startsWith("#EXTINF")) {
-      let j = i + 1; while (j < lines.length && (lines[j].startsWith("#") || !lines[j].trim())) j++;
-      if (lines[j]) segments.push({ url: sub(lines[j].trim()), key: curKey });
-      i = j;
-    }
-  }
-  return { init, segments, firstKey };
 }
 
 // ---------- crypto ----------
@@ -159,15 +109,50 @@ function toTXT(j) {
   return s.trim() + "\n";
 }
 
-// ---------- shared ----------
-async function getStreamContext() {
-  const master = await fx(forceHls(JOB.manifestUrl), "text");
-  const m = parseMaster(master);
-  const videoMedia = parseMedia(await fx(m.videoUrl, "text"), m.vpk);
-  return { m, videoMedia };
+// ---------- manifest discovery ----------
+// Try every candidate URL (see SPManifest.candidateIndexUrls), HLS first because
+// the pipeline was built for it, then DASH. Each attempt is logged so a failure
+// leaves a usable diagnostic in the panel.
+const SRC = { capture: "requête du lecteur", page: "g_fileInfo de la page", transcode: "segment oneDrive.transcode" };
+
+async function fromHls(master) {
+  const m = SPManifest.parseMaster(master);
+  const video = SPManifest.parseMedia(await fx(m.videoUrl, "text"), m.vpk);
+  const audio = m.audioUrl ? SPManifest.parseMedia(await fx(m.audioUrl, "text"), m.vpk) : null;
+  return { kind: "HLS", video, audio };
 }
+function fromMpd(xml, url) {
+  const r = SPManifest.parseMpd(xml, url);
+  if (r.hardDrm) throw new Error("Contenu protégé par DRM (Widevine/PlayReady) : non pris en charge.");
+  return { kind: "DASH", video: r.video, audio: r.audio };
+}
+async function getStreamContext() {
+  const cands = SPManifest.candidateIndexUrls(JOB.cap);
+  if (!cands.length) throw new Error("Aucune source de manifeste disponible.");
+  let tries = 0;
+  for (const c of cands) {
+    for (const fmt of ["hls", "dash"]) {
+      const url = SPManifest.withFormat(c.url, fmt);
+      tries++;
+      log(`Manifeste ${fmt.toUpperCase()} (${SRC[c.source]}) : ${short(url)}`);
+      let text;
+      try { text = await fx(url, "text"); }
+      catch (e) { log("  ✗ " + e.message, "err"); continue; }
+      try {
+        if (fmt === "hls" && SPManifest.looksLikeHls(text)) return await fromHls(text);
+        if (fmt === "dash" && SPManifest.looksLikeMpd(text)) return fromMpd(text, url);
+        log("  ✗ réponse inattendue : " + text.slice(0, 100).replace(/\s+/g, " "), "err");
+      } catch (e) {
+        if (/DRM/.test(e.message)) throw e;
+        log("  ✗ " + e.message, "err");
+      }
+    }
+  }
+  throw new Error(`Aucun manifeste exploitable après ${tries} tentative(s) — copiez le journal pour diagnostic.`);
+}
+
 async function fetchTranscriptJSON(firstKey) {
-  const raw = await fx(JOB.transcriptUrl, "buf");
+  const raw = await fx(JOB.cap.transcriptUrl, "buf");
   const k = await importKey(firstKey.uri);
   const dec = await crypto.subtle.decrypt({ name: "AES-CBC", iv: firstKey.iv }, k, raw);
   return JSON.parse(new TextDecoder().decode(dec));
@@ -179,16 +164,16 @@ function saveBytes(bytes, filename, mime) {
 
 // ---------- flows ----------
 async function runVideo(base) {
-  busy(true); log("Lecture du manifeste HLS…");
-  const { m, videoMedia } = await getStreamContext();
-  const audioMedia = m.audioUrl ? parseMedia(await fx(m.audioUrl, "text"), m.vpk) : null;
-  log(`Vidéo : ${videoMedia.segments.length} segments${audioMedia ? `, audio : ${audioMedia.segments.length}` : " (audio inclus)"}`);
+  busy(true); log("Recherche du manifeste…");
+  const ctx = await getStreamContext();
+  const { video, audio } = ctx;
+  log(`${ctx.kind} — vidéo : ${video.segments.length} segments${audio ? `, audio : ${audio.segments.length}` : " (audio inclus)"}${video.firstKey ? ", chiffré AES-128" : ""}`);
 
-  const vShare = audioMedia ? 60 : 90, aShare = audioMedia ? 28 : 0;
+  const vShare = audio ? 60 : 90, aShare = audio ? 28 : 0;
   let vP = 0, aP = 0;
-  const videoBuf = await buildTrack("vidéo", videoMedia, vShare, (p, s) => { vP = p; setPct(vP + aP); if (s) log(s); });
+  const videoBuf = await buildTrack("vidéo", video, vShare, (p, s) => { vP = p; setPct(vP + aP); if (s) log(s); });
   let audioBuf = null;
-  if (audioMedia) audioBuf = await buildTrack("audio", audioMedia, aShare, (p, s) => { aP = p; setPct(vP + aP); if (s) log(s); });
+  if (audio) audioBuf = await buildTrack("audio", audio, aShare, (p, s) => { aP = p; setPct(vP + aP); if (s) log(s); });
 
   let out;
   if (audioBuf) { log("Remux vidéo + audio (JS)…"); setPct(94); out = FMP4Mux.remux(videoBuf, audioBuf); }
@@ -201,10 +186,10 @@ async function runVideo(base) {
 
 async function runTranscript(base, fmt) {
   busy(true); log("Récupération de la clé…");
-  const { videoMedia } = await getStreamContext();
-  if (!videoMedia.firstKey) throw new Error("Clé de déchiffrement introuvable.");
+  const { video } = await getStreamContext();
+  if (!video.firstKey) throw new Error("Clé de déchiffrement introuvable.");
   setPct(45); log("Déchiffrement du transcript…");
-  const j = await fetchTranscriptJSON(videoMedia.firstKey);
+  const j = await fetchTranscriptJSON(video.firstKey);
   setPct(85);
   // Neutral MIME for .srt so Chrome keeps the extension (text/plain would force .txt).
   const map = { vtt: [toVTT(j), ".vtt", "text/vtt"], srt: [toSRT(j), ".srt", "application/octet-stream"], txt: [toTXT(j), ".txt", "text/plain"] };
@@ -213,11 +198,17 @@ async function runTranscript(base, fmt) {
   setPct(100); log(`✓ Transcript (${(j.entries || []).length} segments).`, "done"); busy(false);
 }
 
+let holdStatus = false; // keep an error message on screen until the next action
 function guard(fn) {
   return async (...a) => {
+    holdStatus = false;
     try { await fn(...a); }
-    catch (e) { $("status").className = "status err"; $("status").textContent = "Échec : " + (e && e.message ? e.message : e);
-      log("Astuce : le jeton expire vite — relancez la lecture puis réessayez.", "err"); busy(false); }
+    catch (e) {
+      holdStatus = true;
+      $("status").className = "status err"; $("status").textContent = "Échec : " + (e && e.message ? e.message : e);
+      log("Astuce : lancez la lecture quelques secondes (cela capture un jeton frais), puis réessayez. Si l'erreur persiste, copiez ce journal.", "err");
+      busy(false);
+    }
   };
 }
 
@@ -225,13 +216,17 @@ function guard(fn) {
 async function refresh() {
   const store = await chrome.storage.session.get(`capture_${tabId}`);
   const cap = store[`capture_${tabId}`] || {};
-  if (!cap.manifestUrl || !cap.token) return false;
+  const cands = SPManifest.candidateIndexUrls(cap);
+  if (!cands.length) return false;
 
-  JOB = { manifestUrl: cap.manifestUrl, token: cap.token, transcriptUrl: cap.transcriptUrl || null };
-  $("status").className = "status ok";
-  $("status").textContent = "✓ Vidéo détectée" + (cap.transcriptUrl ? " (transcript dispo)" : "");
+  JOB = { cap }; // refreshed continuously so a fresher token is picked up mid-download
   $("controls").hidden = false;
   $("trBlock").hidden = !cap.transcriptUrl;
+  if (!holdStatus && !$("dlVideo").disabled) { // don't clobber an error or a running job
+    const srcs = [...new Set(cands.map((c) => c.source))].map((s) => SRC[s]).join(", ");
+    $("status").className = "status ok";
+    $("status").textContent = `✓ Vidéo détectée (${srcs})` + (cap.transcriptUrl ? " · transcript dispo" : "") + (cap.token ? "" : " · jeton non capturé");
+  }
   return true;
 }
 
@@ -240,10 +235,11 @@ async function main() {
   try { const t = await chrome.tabs.get(tabId); if (t && t.title) $("fname").value = sanitize(t.title); }
   catch (e) { $("fname").value = "enregistrement"; }
 
-  const ready = await refresh();
-  if (!ready) {
-    const poll = setInterval(async () => { if (await refresh()) clearInterval(poll); }, 1500);
-  }
+  // Ask the service worker to (re)read g_fileInfo now, then keep the view in
+  // sync with whatever gets captured later (token, transcript URL…).
+  try { await chrome.runtime.sendMessage({ type: "probe", tabId }); } catch (e) { /* worker asleep or no tab */ }
+  await refresh();
+  setInterval(refresh, 1500);
 
   $("dlVideo").addEventListener("click", guard(() => runVideo(sanitize($("fname").value))));
   document.querySelectorAll(".seg button").forEach((b) =>

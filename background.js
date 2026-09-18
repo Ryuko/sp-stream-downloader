@@ -1,48 +1,120 @@
-// Service worker: capture the SharePoint Stream manifest + auth token + transcript URL
-// for the active tab, by observing the requests the player makes.
+// Service worker: collect, per tab, everything the panel needs to rebuild the
+// video manifest URL and authenticate:
+//  - g_fileInfo from the page (read via chrome.scripting in the MAIN world).
+//    Primary source since Sept 2026: the player no longer requests
+//    `…/videomanifest…`, but that endpoint still answers when asked directly.
+//  - videomanifest / oneDrive.transcode requests the player makes, plus the
+//    X-SPOPacToken header when present (needed by the *.svc.ms CDN).
+//  - the transcript URL.
 
 const KEY = (tabId) => `capture_${tabId}`;
 const DBG = true;
 const dbg = (...a) => DBG && console.log("[SPSD]", ...a);
+
+const isReady = (c) => !!(c.manifestUrl || c.transcodeUrl || (c.fileInfo && c.fileInfo.transformUrl));
 
 async function getCapture(tabId) {
   const o = await chrome.storage.session.get(KEY(tabId));
   return o[KEY(tabId)] || {};
 }
 
+function setBadge(tabId, on) {
+  chrome.action.setBadgeText({ tabId, text: on ? "●" : "" }).catch(() => {});
+  chrome.action.setBadgeBackgroundColor({ tabId, color: "#22c55e" }).catch(() => {});
+}
+
 async function updateCapture(tabId, patch) {
   const cur = await getCapture(tabId);
   const next = { ...cur, ...patch, ts: Date.now() };
   await chrome.storage.session.set({ [KEY(tabId)]: next });
-  const ready = next.manifestUrl && next.token;
-  chrome.action.setBadgeText({ tabId, text: ready ? "●" : "" });
-  chrome.action.setBadgeBackgroundColor({ tabId, color: "#22c55e" });
+  setBadge(tabId, isReady(next));
   dbg("capture updated tab", tabId, {
+    hasFileInfo: !!(next.fileInfo && next.fileInfo.transformUrl),
     hasManifest: !!next.manifestUrl,
+    hasTranscode: !!next.transcodeUrl,
     hasToken: !!next.token,
     hasTranscript: !!next.transcriptUrl,
-    isIndex: !!next.manifestIsIndex,
   });
 }
 
-// 1) Capture the video manifest URL + X-SPOPacToken (auth) from the player's requests.
-//    Broad filter on *.svc.ms, precise matching done in the handler.
+async function clearCapture(tabId) {
+  await chrome.storage.session.remove(KEY(tabId));
+  setBadge(tabId, false);
+}
+
+// 0) Read g_fileInfo from the page (inline in the HTML, so it is there as soon as
+//    the document is loaded — no playback needed).
+async function probeFileInfo(tabId) {
+  try {
+    const res = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: () => {
+        const g = window.g_fileInfo;
+        if (!g || typeof g !== "object") return null;
+        return {
+          transformUrl: g[".transformUrl"] || g[".providerCdnTransformUrl"] || null,
+          ctag: g[".ctag"] || null,
+          spItemUrl: g[".spItemUrl"] || null,
+          name: g.displayName || g.name || g.title || null,
+          hasTranscripts: !!g.hasTranscripts,
+        };
+      },
+    });
+    const info = res && res[0] && res[0].result;
+    if (info && info.transformUrl) {
+      await updateCapture(tabId, { fileInfo: info });
+      return true;
+    }
+    dbg("probe: no g_fileInfo/.transformUrl on tab", tabId, info);
+  } catch (e) {
+    dbg("probe failed on tab", tabId, e && e.message);
+  }
+  return false;
+}
+
+// Identity of the item shown by a Stream page URL (its `id=` param), so that
+// opening another recording in the same tab drops the previous capture.
+function pageIdOf(url) {
+  try { const u = new URL(url); return u.searchParams.get("id") || u.pathname; } catch (e) { return url; }
+}
+
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  if (!tab || !tab.url || !/^https:\/\/[^/]+\.sharepoint\.com\//i.test(tab.url)) return;
+  if (info.url) {
+    const id = pageIdOf(info.url);
+    getCapture(tabId).then(async (cur) => {
+      if (cur.pageId && cur.pageId !== id) { dbg("tab", tabId, "moved to another item, clearing capture"); await clearCapture(tabId); }
+      if (cur.pageId !== id) await updateCapture(tabId, { pageId: id });
+    });
+  }
+  if (info.status === "complete") probeFileInfo(tabId);
+});
+
+// 1) Observe the player's media requests: legacy `videomanifest` and the newer
+//    `oneDrive.transcode` endpoint. Keep the URL (index preferred over a segment)
+//    and refresh the X-SPOPacToken whenever we see one.
 chrome.webRequest.onSendHeaders.addListener(
   (d) => {
     if (d.tabId < 0) return;
-    if (!/videomanifest/i.test(d.url)) return;
+    const isVM = /videomanifest/i.test(d.url);
+    const isTC = /oneDrive\.transcode/i.test(d.url);
+    if (!isVM && !isTC) return;
     const h = d.requestHeaders || [];
     const tokHeader = h.find((x) => x.name.toLowerCase() === "x-spopactoken");
     const tok = tokHeader && tokHeader.value;
-    dbg("videomanifest seen", { tab: d.tabId, hasToken: !!tok, url: d.url.slice(0, 80) });
-    if (!tok) return;
     const isIndex = /[?&]part=index/i.test(d.url);
     getCapture(d.tabId).then((cur) => {
-      if (cur.manifestIsIndex && !isIndex) {
-        updateCapture(d.tabId, { token: tok }); // refresh token only
-        return;
+      const patch = {};
+      if (tok && tok !== cur.token) patch.token = tok;
+      if (isVM) {
+        if (isIndex || !cur.manifestIsIndex) { patch.manifestUrl = d.url; patch.manifestIsIndex = isIndex; }
+      } else if (isIndex || !cur.transcodeUrl || !cur.transcodeIsIndex) {
+        patch.transcodeUrl = d.url; patch.transcodeIsIndex = isIndex;
       }
-      updateCapture(d.tabId, { manifestUrl: d.url, token: tok, manifestIsIndex: isIndex });
+      if (!Object.keys(patch).length) return;
+      dbg(isVM ? "videomanifest seen" : "transcode seen", { tab: d.tabId, hasToken: !!tok, isIndex, url: d.url.slice(0, 100) });
+      updateCapture(d.tabId, patch);
     });
   },
   { urls: ["https://*.svc.ms/*", "https://*.sharepoint.com/*"] },
@@ -63,10 +135,16 @@ chrome.webRequest.onSendHeaders.addListener(
 
 chrome.tabs.onRemoved.addListener((tabId) => chrome.storage.session.remove(KEY(tabId)));
 
-// Let the content script learn its own tab id, and let the toolbar icon toggle the overlay.
+// Messages: content script asks its tab id; the panel asks for a fresh g_fileInfo probe.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg && msg.type === "whoami") {
     sendResponse({ tabId: sender.tab ? sender.tab.id : null });
+    return true;
+  }
+  if (msg && msg.type === "probe") {
+    const id = typeof msg.tabId === "number" ? msg.tabId : sender.tab && sender.tab.id;
+    if (typeof id !== "number") { sendResponse({ ok: false }); return true; }
+    probeFileInfo(id).then((ok) => sendResponse({ ok }));
     return true;
   }
 });
