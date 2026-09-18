@@ -149,6 +149,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 });
 
+// After an install/reload, SharePoint tabs that are already open have no (live)
+// content script: inject it so the toolbar icon works without a page reload,
+// and read their g_fileInfo right away.
+chrome.runtime.onInstalled.addListener(async () => {
+  let tabs = [];
+  try { tabs = await chrome.tabs.query({ url: "https://*.sharepoint.com/*" }); } catch (e) { return; }
+  for (const t of tabs) {
+    if (typeof t.id !== "number") continue;
+    try {
+      await chrome.scripting.insertCSS({ target: { tabId: t.id }, files: ["content.css"] });
+      await chrome.scripting.executeScript({ target: { tabId: t.id }, files: ["content.js"] });
+      dbg("content script injected into existing tab", t.id);
+    } catch (e) { dbg("could not inject into tab", t.id, e && e.message); }
+    probeFileInfo(t.id);
+  }
+});
+
 chrome.action.onClicked.addListener((tab) => {
   chrome.tabs.sendMessage(tab.id, { type: "togglePanel" }).catch(() => {
     dbg("no content script on this tab (not a SharePoint page?)");

@@ -205,3 +205,11 @@ test("looksLikeHls / looksLikeMpd sniff the manifest body", () => {
   assert.equal(M.looksLikeMpd(MPD), true);
   assert.equal(M.looksLikeMpd("<html>access denied</html>"), false);
 });
+
+// ---------------------------------------------------------------- runtime errors
+test("isContextInvalidated recognises the error thrown by a stale extension page after a reload", () => {
+  assert.equal(M.isContextInvalidated(new Error("Extension context invalidated.")), true);
+  assert.equal(M.isContextInvalidated({ message: "extension context invalidated" }), true);
+  assert.equal(M.isContextInvalidated(new Error("HTTP 401")), false);
+  assert.equal(M.isContextInvalidated(null), false);
+});

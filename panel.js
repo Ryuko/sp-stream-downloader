@@ -238,8 +238,20 @@ async function main() {
   // Ask the service worker to (re)read g_fileInfo now, then keep the view in
   // sync with whatever gets captured later (token, transcript URL…).
   try { await chrome.runtime.sendMessage({ type: "probe", tabId }); } catch (e) { /* worker asleep or no tab */ }
-  await refresh();
-  setInterval(refresh, 1500);
+  // When the extension is reloaded while this panel is open, every chrome.* call
+  // throws "Extension context invalidated": stop polling and tell the user.
+  const timer = setInterval(safeRefresh, 1500);
+  async function safeRefresh() {
+    try { await refresh(); }
+    catch (e) {
+      if (!SPManifest.isContextInvalidated(e)) { console.warn("[SPSD]", e); return; }
+      clearInterval(timer);
+      holdStatus = true; busy(true);
+      $("status").className = "status err";
+      $("status").textContent = "Extension rechargée : rechargez la page (Cmd/Ctrl+R) puis rouvrez le panneau.";
+    }
+  }
+  await safeRefresh();
 
   $("dlVideo").addEventListener("click", guard(() => runVideo(sanitize($("fname").value))));
   document.querySelectorAll(".seg button").forEach((b) =>

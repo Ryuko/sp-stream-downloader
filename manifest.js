@@ -67,6 +67,9 @@
   const looksLikeHls = (t) => /^\s*#EXTM3U/.test(String(t));
   const looksLikeMpd = (t) => /<MPD[\s>]/i.test(String(t));
 
+  // Thrown by any chrome.* call from an extension page that outlived a reload of the extension.
+  const isContextInvalidated = (e) => !!(e && /extension context invalidated/i.test(e.message || ""));
+
   // ---------------------------------------------------------------- shared crypto bits
   function hexToIv(hex) {
     hex = String(hex || "").replace(/^0x/i, "").padStart(32, "0").slice(-32);
@@ -262,7 +265,7 @@
 
   const api = {
     candidateIndexUrls, withFormat, toIndexUrl, stripParams, redact, looksLikeHls, looksLikeMpd,
-    parseMaster, parseMedia, parseMpd, hexToIv,
+    parseMaster, parseMedia, parseMpd, hexToIv, isContextInvalidated,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   global.SPManifest = api;
