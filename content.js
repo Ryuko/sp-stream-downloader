@@ -14,7 +14,10 @@
   });
 
   chrome.runtime.onMessage.addListener((m) => {
-    if (m && m.type === "togglePanel") togglePanel();
+    if (!m || m.type !== "togglePanel") return;
+    // Sent along so a panel opened right after injection doesn't race "whoami".
+    if (typeof m.tabId === "number") myTabId = m.tabId;
+    togglePanel();
   });
 
   // The panel (iframe) asks us to close it via postMessage.

@@ -155,6 +155,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 });
 
+// Give an already-open tab a live content script (harmless if it has one:
+// content.js guards against double injection).
+async function injectInto(tabId) {
+  try {
+    await chrome.scripting.insertCSS({ target: { tabId }, files: ["content.css"] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
+    dbg("content script injected into existing tab", tabId);
+  } catch (e) { dbg("could not inject into tab", tabId, e && e.message); }
+}
+
 // After an install/reload, SharePoint tabs that are already open have no (live)
 // content script: inject it so the toolbar icon works without a page reload,
 // and read their g_fileInfo right away.
@@ -163,19 +173,36 @@ chrome.runtime.onInstalled.addListener(async () => {
   try { tabs = await chrome.tabs.query({ url: "https://*.sharepoint.com/*" }); } catch (e) { return; }
   for (const t of tabs) {
     if (typeof t.id !== "number") continue;
-    try {
-      await chrome.scripting.insertCSS({ target: { tabId: t.id }, files: ["content.css"] });
-      await chrome.scripting.executeScript({ target: { tabId: t.id }, files: ["content.js"] });
-      dbg("content script injected into existing tab", t.id);
-    } catch (e) { dbg("could not inject into tab", t.id, e && e.message); }
+    await injectInto(t.id);
     probeFileInfo(t.id);
   }
 });
 
+// Host access can be withheld by the user (Firefox MV3 treats host_permissions
+// as revocable; Chrome has "on click" site access). Without it neither the
+// content script nor the capture runs, so the toolbar click asks for it.
+// permissions.request() only counts as a user action when called synchronously
+// from the click handler, hence the grant is tracked ahead of time.
+const HOSTS = chrome.runtime.getManifest().host_permissions;
+let hostsGranted = true;
+const checkHosts = () => chrome.permissions.contains({ origins: HOSTS }).then((ok) => { hostsGranted = ok; }).catch(() => {});
+checkHosts();
+chrome.permissions.onAdded.addListener(checkHosts);
+chrome.permissions.onRemoved.addListener(checkHosts);
+
+const togglePanel = (tabId) => chrome.tabs.sendMessage(tabId, { type: "togglePanel", tabId }).catch(() => {
+  dbg("no content script on this tab (not a SharePoint page?)");
+});
+
 chrome.action.onClicked.addListener((tab) => {
-  chrome.tabs.sendMessage(tab.id, { type: "togglePanel" }).catch(() => {
-    dbg("no content script on this tab (not a SharePoint page?)");
-  });
+  if (hostsGranted) { togglePanel(tab.id); return; }
+  chrome.permissions.request({ origins: HOSTS }).then(async (ok) => {
+    hostsGranted = ok;
+    if (!ok) { dbg("host access refused"); return; }
+    await injectInto(tab.id);
+    probeFileInfo(tab.id);
+    togglePanel(tab.id);
+  }).catch((e) => dbg("permission request failed", e && e.message));
 });
 
 dbg("background ready");
