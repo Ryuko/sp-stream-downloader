@@ -1,5 +1,6 @@
-// Service worker: collect, per tab, everything the panel needs to rebuild the
-// video manifest URL and authenticate:
+// Background script (service worker on Chrome, event page on Firefox): collect,
+// per tab, everything the panel needs to rebuild the video manifest URL and
+// authenticate:
 //  - g_fileInfo from the page (read via chrome.scripting in the MAIN world).
 //    Primary source since Sept 2026: the player no longer requests
 //    `…/videomanifest…`, but that endpoint still answers when asked directly.
@@ -91,10 +92,17 @@ chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
   if (info.status === "complete") probeFileInfo(tabId);
 });
 
+// Chrome only exposes some request headers when "extraHeaders" is asked for;
+// Firefox exposes them all and rejects that option, so retry without it.
+function onSendHeaders(listener, urls) {
+  try { chrome.webRequest.onSendHeaders.addListener(listener, { urls }, ["requestHeaders", "extraHeaders"]); }
+  catch (e) { chrome.webRequest.onSendHeaders.addListener(listener, { urls }, ["requestHeaders"]); }
+}
+
 // 1) Observe the player's media requests: legacy `videomanifest` and the newer
 //    `oneDrive.transcode` endpoint. Keep the URL (index preferred over a segment)
 //    and refresh the X-SPOPacToken whenever we see one.
-chrome.webRequest.onSendHeaders.addListener(
+onSendHeaders(
   (d) => {
     if (d.tabId < 0) return;
     const isVM = /videomanifest/i.test(d.url);
@@ -117,20 +125,18 @@ chrome.webRequest.onSendHeaders.addListener(
       updateCapture(d.tabId, patch);
     });
   },
-  { urls: ["https://*.svc.ms/*", "https://*.sharepoint.com/*"] },
-  ["requestHeaders", "extraHeaders"]
+  ["https://*.svc.ms/*", "https://*.sharepoint.com/*"]
 );
 
 // 2) Capture the transcript URL (encrypted JSON, same key as the video).
-chrome.webRequest.onSendHeaders.addListener(
+onSendHeaders(
   (d) => {
     if (d.tabId < 0) return;
     if (!/cdnmedia\/transcripts/i.test(d.url)) return;
     dbg("transcript seen", { tab: d.tabId, url: d.url.slice(0, 80) });
     updateCapture(d.tabId, { transcriptUrl: d.url });
   },
-  { urls: ["https://*.sharepoint.com/*"] },
-  ["requestHeaders", "extraHeaders"]
+  ["https://*.sharepoint.com/*"]
 );
 
 chrome.tabs.onRemoved.addListener((tabId) => chrome.storage.session.remove(KEY(tabId)));
@@ -172,4 +178,4 @@ chrome.action.onClicked.addListener((tab) => {
   });
 });
 
-dbg("service worker ready");
+dbg("background ready");

@@ -9,7 +9,8 @@
     "https://*.svc.ms/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
   },
   "action": {
     "default_title": "SharePoint Stream Downloader — ouvrir le panneau"
@@ -30,5 +31,12 @@
   ],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "sp-stream-downloader@extension",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": { "required": ["none"] }
+    }
   }
 }
