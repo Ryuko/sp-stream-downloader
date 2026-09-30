@@ -44,10 +44,27 @@ Zen est basé sur Firefox : même procédure. La version Firefox sous-jacente do
 Un module **temporaire** disparaît au redémarrage du navigateur (pratique pour développer : le
 bouton **Recharger** d'`about:debugging` applique les modifications).
 
-#### Installation durable
+#### Installation durable sans signature (Zen, Firefox Developer Edition / Nightly / ESR)
 
-Faites-le **signer** par Mozilla en diffusion privée (« unlisted », rien n'est publié) avec
-`web-ext sign --channel=unlisted`, puis installez le `.xpi` obtenu. L'identifiant du module (`browser_specific_settings.gecko.id` dans
+1. Dans `about:config`, passez **`xpinstall.signatures.required`** à **`false`** (ignoré par Firefox
+   stable ; si l'installation échoue avec « module corrompu » ou « non vérifié », le navigateur ne
+   respecte pas ce réglage).
+2. Construisez le paquet :
+   ```bash
+   ./pack.sh        # → sp-stream-downloader.xpi
+   ```
+3. `about:addons` → roue dentée → **« Installer un module depuis un fichier… »** → choisissez
+   `sp-stream-downloader.xpi`.
+
+Après une modification du code : relancez `./pack.sh` et réinstallez le `.xpi` (il remplace
+l'ancien, même identifiant ; si l'ancienne version reste active, incrémentez `version` dans
+`manifest.json`).
+
+#### Installation durable sur Firefox stable
+
+Firefox stable n'accepte que les modules signés : faites-le **signer** par Mozilla en diffusion
+privée (« unlisted », rien n'est publié) avec `web-ext sign --channel=unlisted`, puis installez le
+`.xpi` obtenu. L'identifiant du module (`browser_specific_settings.gecko.id` dans
 `manifest.json`) doit être unique pour une signature : remplacez-le si besoin.
 
 Aucun téléchargement de dépendance : l'extension est autonome, et le même dossier sert à tous les
@@ -135,6 +152,7 @@ sp-stream-downloader/
 ├─ panel.html/js    # UI + pipeline : fetch, déchiffrement, remux, téléchargement
 ├─ manifest.js      # URLs candidates + parseurs HLS / DASH (pur JS, testable sous Node)
 ├─ mux.js           # remuxeur fragmented-MP4 en pur JS (vidéo + audio → MP4)
+├─ pack.sh          # construit le .xpi (Firefox / Zen)
 └─ test/            # tests unitaires (node:test)
 ```
 
