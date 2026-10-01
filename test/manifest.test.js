@@ -50,13 +50,15 @@ test("candidateIndexUrls: g_fileInfo without transformUrl yields nothing", () =>
   assert.deepEqual(M.candidateIndexUrls({}), []);
 });
 
-test("candidateIndexUrls: authenticates the page URL with g_fileInfo's drive tokens (both param names) before the bare one", () => {
+test("candidateIndexUrls: authenticates the page URL with g_fileInfo's drive tokens as tempauth, before the bare one", () => {
   const transformUrl = "https://fc-1.mediap.svc.ms/transform/thumbnail?provider=spo&docid=https%3A%2F%2Ft.sharepoint.com%2Fx";
-  const cands = M.candidateIndexUrls({ fileInfo: { transformUrl, driveAccessToken: "v1.AB+c/d=", driveAccessTokenV21: "v1.AB+c/d=" } });
+  const cands = M.candidateIndexUrls({ fileInfo: { transformUrl, driveAccessToken: "v1.AB+c/d=", driveAccessTokenV21: "v1.V21" } });
   assert.deepEqual(cands.map((c) => c.source), ["pageToken", "pageToken", "page"]);
   assert.ok(/&part=index&tempauth=v1\.AB%2Bc%2Fd%3D$/.test(cands[0].url), "token must be URL-encoded");
-  assert.ok(/&part=index&access_token=v1\.AB%2Bc%2Fd%3D$/.test(cands[1].url));
-  assert.ok(!/tempauth|access_token/.test(cands[2].url));
+  assert.ok(/&part=index&tempauth=v1\.V21$/.test(cands[1].url));
+  assert.ok(!/tempauth/.test(cands[2].url));
+  const same = M.candidateIndexUrls({ fileInfo: { transformUrl, driveAccessToken: "t", driveAccessTokenV21: "t" } });
+  assert.equal(same.length, 2, "identical tokens give a single candidate");
 });
 
 test("candidateIndexUrls: a transformUrl that already carries tempauth gets no extra token", () => {

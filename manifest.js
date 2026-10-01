@@ -56,11 +56,11 @@
       url = setParam(url, "part", "index");
       // .transformUrl carries no credential: the svc.ms service then needs the
       // X-SPOPacToken header, only seen once playback starts. g_fileInfo also
-      // holds drive access tokens, available on load; which query param the
-      // service takes them in is unknown, so try both names.
+      // holds drive access tokens, available on load, that the service accepts
+      // as `tempauth` (checked Oct 2026: both work; as `access_token`, V21 is refused).
       if (!AUTH_PARAM.test(url)) {
         for (const tok of new Set([fi.driveAccessToken, fi.driveAccessTokenV21].filter(Boolean))) {
-          for (const p of ["tempauth", "access_token"]) push("pageToken", setParam(url, p, encodeURIComponent(tok)));
+          push("pageToken", setParam(url, "tempauth", encodeURIComponent(tok)));
         }
       }
       push("page", url);
