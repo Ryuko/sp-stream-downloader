@@ -5,7 +5,8 @@ Télécharge **la vidéo (MP4)** et **le transcript (VTT / SRT / texte)** des en
 même quand le bouton « Télécharger » est désactivé.
 
 L'extension reconstruit l'URL du manifeste vidéo à partir des métadonnées de la page
-(`g_fileInfo`) et de ce qu'elle observe pendant la lecture (jeton, requêtes du lecteur), sélectionne
+(`g_fileInfo`, qui fournit aussi un jeton d'accès) et, en complément, de ce qu'elle observe pendant la
+lecture (jeton, requêtes du lecteur), sélectionne
 **la meilleure qualité disponible**, récupère les segments **en parallèle**, les **déchiffre
 (AES-128) via WebCrypto**, puis **remuxe la vidéo + l'audio en MP4 en pur JavaScript** — le tout
 **en local, dans votre navigateur**. Aucun serveur tiers, aucune dépendance externe, aucune étape
@@ -74,9 +75,9 @@ navigateurs.
 
 ## Utilisation
 
-1. Ouvrez l'enregistrement dans SharePoint / Teams Stream. La vidéo est détectée dès le
-   chargement de la page ; **lancer la lecture quelques secondes** reste conseillé (cela capture
-   un jeton frais, nécessaire sur certains tenants).
+1. Ouvrez l'enregistrement dans SharePoint / Teams Stream. La vidéo est détectée et téléchargeable
+   dès le chargement de la page, **sans lancer la lecture** : la page fournit son propre jeton
+   d'accès. En cas d'erreur `401`, lancer la lecture quelques secondes capture un jeton de secours.
 2. Cliquez sur l'**icône de l'extension** : un **panneau** s'ouvre **en surimpression sur la page**
    (pas de nouvel onglet). Un badge vert **●** sur l'icône indique qu'une vidéo est détectée.
 3. Dans le panneau :
@@ -112,7 +113,7 @@ que le jeton de la session en cours. Rien n'est partagé entre utilisateurs.
 
 | Étape | Détail |
 |-------|--------|
-| **Détection** | `background.js` (service worker sous Chrome, page d'événements sous Firefox) lit `g_fileInfo` dans la page (via `chrome.scripting`, monde MAIN) : `.transformUrl` + `.ctag` permettent de reconstruire l'URL `…/videomanifest?…&action=Access&part=index` (même méthode que yt-dlp). Il observe aussi les requêtes `…/videomanifest…` et `…/oneDrive.transcode…` du lecteur, l'en-tête `X-SPOPacToken` (rafraîchi à la volée) et l'URL du transcript. |
+| **Détection** | `background.js` (service worker sous Chrome, page d'événements sous Firefox) lit `g_fileInfo` dans la page (via `chrome.scripting`, monde MAIN) : `.transformUrl` + `.ctag` permettent de reconstruire l'URL `…/videomanifest?…&action=Access&part=index` (même méthode que yt-dlp), authentifiée par `.driveAccessToken` (en paramètre `tempauth` ou `access_token`) sans attendre la lecture. Il observe aussi les requêtes `…/videomanifest…` et `…/oneDrive.transcode…` du lecteur, l'en-tête `X-SPOPacToken` (rafraîchi à la volée) et l'URL du transcript. |
 | **UI** | `content.js` injecte le panneau (`panel.html`) en overlay dans la page ; il tourne dans le contexte de l'extension (accès aux API, permissions d'hôte). |
 | **Manifeste** | `manifest.js` construit les URLs candidates (requête capturée, `g_fileInfo`, segment `oneDrive.transcode`) et les essaie dans l'ordre, en **HLS** (`format=hls`) puis en **DASH** (`format=dash`, MPD avec `SegmentTemplate`/`SegmentTimeline` et chiffrement DASH-SEA AES-128-CBC). La variante de **plus haute qualité** est retenue automatiquement ; chaque tentative est tracée dans le journal du panneau. |
 | **Déchiffrement** | Les segments sont récupérés **en parallèle** (12 à la fois) et déchiffrés en **AES-128-CBC** via `crypto.subtle` (WebCrypto). |
@@ -126,8 +127,9 @@ que le jeton de la session en cours. Rien n'est partagé entre utilisateurs.
 - **« Recherche d'une vidéo… »** qui ne se termine pas → rechargez la page (Cmd/Ctrl+R), lancez la
   **lecture**, puis rouvrez le panneau. Si la page était déjà ouverte avant d'installer ou de
   recharger l'extension, le rechargement est indispensable.
-- **Erreur `HTTP 401/403`** ou **« jeton non capturé »** → lancez la lecture quelques secondes
-  (le lecteur envoie alors un `X-SPOPacToken` frais), puis réessayez.
+- **Erreur `HTTP 401/403`** ou **« jeton non capturé »** → rechargez la page (le jeton qu'elle
+  fournit a pu expirer) ; sinon lancez la lecture quelques secondes (le lecteur envoie alors un
+  `X-SPOPacToken` frais), puis réessayez.
 - **« Aucun manifeste exploitable »** → le journal du panneau liste chaque URL essayée et la
   réponse obtenue : c'est l'information à transmettre pour diagnostic.
 - **Septembre 2026** : le lecteur Microsoft n'appelle plus `videomanifest` (il télécharge ses
