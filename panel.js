@@ -251,10 +251,15 @@ async function main() {
   // When the extension is reloaded while this panel is open, every chrome.* call
   // throws "Extension context invalidated": stop polling and tell the user.
   const timer = setInterval(safeRefresh, 1500);
+  let reported = false; // show the first detection error in the panel, not only in the console
   async function safeRefresh() {
     try { await refresh(); }
     catch (e) {
-      if (!SPManifest.isContextInvalidated(e)) { console.warn("[SPSD]", e); return; }
+      if (!SPManifest.isContextInvalidated(e)) {
+        console.warn("[SPSD]", e);
+        if (!reported) { reported = true; log("Erreur de détection : " + (e && e.message ? e.message : e), "err"); }
+        return;
+      }
       clearInterval(timer);
       holdStatus = true; busy(true);
       $("status").className = "status err";
