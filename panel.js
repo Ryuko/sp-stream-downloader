@@ -159,7 +159,16 @@ async function fetchTranscriptJSON(firstKey) {
 }
 function saveBytes(bytes, filename, mime) {
   const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
-  return chrome.downloads.download({ url, filename, saveAs: true }).finally(() => setTimeout(() => URL.revokeObjectURL(url), 60000));
+  const revoke = () => setTimeout(() => URL.revokeObjectURL(url), 60000);
+  // Firefox may withhold some APIs from this framed page: fall back to a plain link.
+  if (!chrome.downloads) {
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    revoke();
+    return Promise.resolve();
+  }
+  return chrome.downloads.download({ url, filename, saveAs: true }).finally(revoke);
 }
 
 // ---------- flows ----------
