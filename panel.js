@@ -214,8 +214,9 @@ function guard(fn) {
 
 // ---------- boot & live detection ----------
 async function refresh() {
-  const store = await chrome.storage.session.get(`capture_${tabId}`);
-  const cap = store[`capture_${tabId}`] || {};
+  // Asked from the background script: Firefox doesn't expose storage.session
+  // to an extension page framed inside a web page (this panel).
+  const cap = (await chrome.runtime.sendMessage({ type: "getCapture", tabId })) || {};
   const cands = SPManifest.candidateIndexUrls(cap);
   if (!cands.length) return false;
 

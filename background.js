@@ -141,8 +141,14 @@ onSendHeaders(
 
 chrome.tabs.onRemoved.addListener((tabId) => chrome.storage.session.remove(KEY(tabId)));
 
-// Messages: content script asks its tab id; the panel asks for a fresh g_fileInfo probe.
+// Messages: content script asks its tab id; the panel asks for a fresh g_fileInfo
+// probe and for the capture (it can't read storage.session itself on Firefox).
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg && msg.type === "getCapture") {
+    if (typeof msg.tabId !== "number") { sendResponse({}); return true; }
+    getCapture(msg.tabId).then(sendResponse);
+    return true;
+  }
   if (msg && msg.type === "whoami") {
     sendResponse({ tabId: sender.tab ? sender.tab.id : null });
     return true;
