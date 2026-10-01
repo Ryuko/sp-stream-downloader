@@ -57,6 +57,8 @@ async function probeFileInfo(tabId) {
           transformUrl: g[".transformUrl"] || g[".providerCdnTransformUrl"] || null,
           ctag: g[".ctag"] || null,
           spItemUrl: g[".spItemUrl"] || null,
+          driveAccessToken: g[".driveAccessToken"] || null,
+          driveAccessTokenV21: g[".driveAccessTokenV21"] || null,
           name: g.displayName || g.name || g.title || null,
           hasTranscripts: !!g.hasTranscripts,
         };

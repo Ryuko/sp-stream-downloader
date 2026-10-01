@@ -50,6 +50,20 @@ test("candidateIndexUrls: g_fileInfo without transformUrl yields nothing", () =>
   assert.deepEqual(M.candidateIndexUrls({}), []);
 });
 
+test("candidateIndexUrls: authenticates the page URL with g_fileInfo's drive tokens (both param names) before the bare one", () => {
+  const transformUrl = "https://fc-1.mediap.svc.ms/transform/thumbnail?provider=spo&docid=https%3A%2F%2Ft.sharepoint.com%2Fx";
+  const cands = M.candidateIndexUrls({ fileInfo: { transformUrl, driveAccessToken: "v1.AB+c/d=", driveAccessTokenV21: "v1.AB+c/d=" } });
+  assert.deepEqual(cands.map((c) => c.source), ["pageToken", "pageToken", "page"]);
+  assert.ok(/&part=index&tempauth=v1\.AB%2Bc%2Fd%3D$/.test(cands[0].url), "token must be URL-encoded");
+  assert.ok(/&part=index&access_token=v1\.AB%2Bc%2Fd%3D$/.test(cands[1].url));
+  assert.ok(!/tempauth|access_token/.test(cands[2].url));
+});
+
+test("candidateIndexUrls: a transformUrl that already carries tempauth gets no extra token", () => {
+  const cands = M.candidateIndexUrls({ fileInfo: { ...FILE_INFO, driveAccessToken: "tok" } });
+  assert.deepEqual(cands.map((c) => c.source), ["page"]);
+});
+
 test("candidateIndexUrls: turns a captured oneDrive.transcode segment URL into an index URL", () => {
   const [c] = M.candidateIndexUrls({ transcodeUrl: TRANSCODE_SEGMENT });
   assert.equal(c.source, "transcode");

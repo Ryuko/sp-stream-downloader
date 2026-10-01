@@ -31,9 +31,11 @@ function sanitize(n) {
   s = s.replace(/(\.(mp4|m4a|mov|vtt|srt|txt))+$/i, "").trim();
   return s.slice(0, 120) || "video";
 }
-// Host + path + the few query params that matter, never credentials.
+// Host + path + the few query params that matter, never credentials (only the
+// name of the auth param, so attempts can be told apart).
 function short(url) {
-  const m = String(url).match(/[?&](part|format|track)=[^&]*/g) || [];
+  const m = (String(url).match(/[?&](part|format|track)=[^&]*|[?&](tempauth|access_token)=/g) || [])
+    .map((x) => (x.endsWith("=") ? x + "…" : x));
   return String(url).split("?")[0].replace(/^https:\/\//, "") + "?" + m.map((x) => x.slice(1)).join("&");
 }
 
@@ -113,7 +115,7 @@ function toTXT(j) {
 // Try every candidate URL (see SPManifest.candidateIndexUrls), HLS first because
 // the pipeline was built for it, then DASH. Each attempt is logged so a failure
 // leaves a usable diagnostic in the panel.
-const SRC = { capture: "requête du lecteur", page: "g_fileInfo de la page", transcode: "segment oneDrive.transcode" };
+const SRC = { capture: "requête du lecteur", pageToken: "g_fileInfo + jeton de la page", page: "g_fileInfo de la page", transcode: "segment oneDrive.transcode" };
 
 async function fromHls(master) {
   const m = SPManifest.parseMaster(master);
@@ -235,7 +237,7 @@ async function refresh() {
   if (!holdStatus && !$("dlVideo").disabled) { // don't clobber an error or a running job
     const srcs = [...new Set(cands.map((c) => c.source))].map((s) => SRC[s]).join(", ");
     $("status").className = "status ok";
-    $("status").textContent = `✓ Vidéo détectée (${srcs})` + (cap.transcriptUrl ? " · transcript dispo" : "") + (cap.token ? "" : " · jeton non capturé");
+    $("status").textContent = `✓ Vidéo détectée (${srcs})` + (cap.transcriptUrl ? " · transcript dispo" : "") + (cap.token || cands.some((c) => c.source === "pageToken") ? "" : " · jeton non capturé");
   }
   return true;
 }

@@ -31,11 +31,13 @@
     const u = stripParams(url, [name]);
     return u + (u.includes("?") ? "&" : "?") + name + "=" + value;
   }
+  const AUTH_PARAM = /[?&](tempauth|access_token)=/i;
   const withFormat = (url, fmt) => setParam(url, "format", fmt);
   const toIndexUrl = (url) => setParam(stripParams(url, SEGMENT_PARAMS), "part", "index");
 
   // Ordered list of manifest "index" URLs (without format) to try.
   //  - capture   : a videomanifest request we saw the player make (legacy path)
+  //  - pageToken : the same, authenticated with a drive access token from g_fileInfo
   //  - page      : rebuilt from g_fileInfo['.transformUrl'] (+ cTag, action=Access), like yt-dlp
   //  - transcode : an oneDrive.transcode segment request we saw, turned into part=index (best effort)
   function candidateIndexUrls(cap) {
@@ -52,6 +54,15 @@
       if (fi.ctag && !/[?&]cTag=/i.test(url)) url = setParam(url, "cTag", encodeURIComponent(fi.ctag));
       url = setParam(url, "action", "Access");
       url = setParam(url, "part", "index");
+      // .transformUrl carries no credential: the svc.ms service then needs the
+      // X-SPOPacToken header, only seen once playback starts. g_fileInfo also
+      // holds drive access tokens, available on load; which query param the
+      // service takes them in is unknown, so try both names.
+      if (!AUTH_PARAM.test(url)) {
+        for (const tok of new Set([fi.driveAccessToken, fi.driveAccessTokenV21].filter(Boolean))) {
+          for (const p of ["tempauth", "access_token"]) push("pageToken", setParam(url, p, encodeURIComponent(tok)));
+        }
+      }
       push("page", url);
     }
 
